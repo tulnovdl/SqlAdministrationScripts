@@ -363,7 +363,7 @@ ORDER BY [DB Buffer Pages Used (MB)] DESC;
 
 
 -- Create user and add user to application role
-use [Zarplata];
+use db_name
 GO
 declare @group nvarchar(100)
 declare @sql nvarchar(200)
