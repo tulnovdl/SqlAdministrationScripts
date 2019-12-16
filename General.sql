@@ -48,7 +48,7 @@ GO
 
 
 -- Copy users from application role 'A' to application role 'B'
-Use %DATABASE%
+Use db_name
 
 DECLARE @user varchar(50)
 DECLARE users_cursor CURSOR FOR
@@ -178,9 +178,9 @@ where logTime between @Dtbegin and @DtEnd and ClientUserName not like 'anonymous
 group by WebProxyLog.ClientIP, WebProxyLog.ClientUserName
 ORDER BY ПолученоМбайт desc
 
-
+ 
 -- Disk usage by database
-use %DATABASE%
+use db_name
 SELECT
     [TYPE] = A.TYPE_DESC
     , [FILE_Name] = A.name
@@ -232,7 +232,7 @@ GO
 EXEC [sys].[sp_validatelogins]
 
 
--- recreate user on server and in each database
+-- Recreate user on server and in each database
 USE [master]
 GO
 DECLARE @domainLogin varchar(1000) = N'user'
@@ -276,3 +276,108 @@ SELECT SUM(CONVERT(BIGINT, o1.MyInt) + CONVERT(BIGINT, o2.MyInt))
 FROM #temp o1
     JOIN #temp o2
     ON o1.MyInt < o2.MyInt;
+
+
+-- Add replication article 
+-- Then check in gui
+use db_name
+EXEC sp_addarticle @publication = N'Finance',
+                   @article = N'Pasp_PlRezult',
+                   @source_owner = N'dbo',
+                   @source_object = N'Pasp_PlRezult',
+                   @type = N'logbased',
+                   @description = N'',
+                   @creation_script = N'',
+                   @pre_creation_cmd = N'drop',
+                   @schema_option = 0x000000000803509F,
+                   @identityrangemanagementoption = N'manual',
+                   @destination_table = N'Pasp_PlRezult',
+                   @destination_owner = N'dbo',
+                   @status = 24,
+                   @vertical_partition = N'false'
+GO
+
+
+-- Select indexes in database
+SELECT
+    TableName = t.name,
+    IndexName = ind.name,
+    IndexId = ind.index_id,
+    ColumnId = ic.index_column_id,
+    ColumnName = col.name,
+    ind.*,
+    ic.*,
+    col.*
+FROM
+    sys.indexes ind
+    INNER JOIN
+    sys.index_columns ic ON ind.object_id = ic.object_id and ind.index_id = ic.index_id
+    INNER JOIN
+    sys.columns col ON ic.object_id = col.object_id and ic.column_id = col.column_id
+    INNER JOIN
+    sys.tables t ON ind.object_id = t.object_id
+WHERE
+     ind.is_primary_key = 0
+    AND ind.is_unique = 0
+    AND ind.is_unique_constraint = 0
+    AND t.is_ms_shipped = 0
+ORDER BY
+     t.name, ind.name, ind.index_id, ic.index_column_id;
+
+
+-- Select from audit files
+SELECT event_time, session_server_principal_name, database_name, object_name, statement
+FROM sys.fn_get_audit_file (N'\\srv\C$\Audit\DeveloperPermissionsAudit_BEA57096-08F4-417C-9811-1D6ABDC9130C_0_131804265715420000.sqlaudit',default,default)
+WHERE 
+server_principal_name <> 'User'
+    AND server_principal_name <> 'sa'
+    AND server_principal_name <> 'backup'
+order by event_time desc
+
+
+-- All databases space usage
+DECLARE @total_buffer INT;
+SELECT @total_buffer = cntr_value
+FROM sys.dm_os_performance_counters
+WHERE  RTRIM([object_name]) LIKE '%Buffer Manager'
+    AND counter_name = 'Database Pages';
+
+;WITH
+    DBBuffer
+    AS
+    (
+        SELECT database_id,
+            COUNT_BIG(*) AS db_buffer_pages,
+            SUM (CAST ([free_space_in_bytes] AS BIGINT)) / (1024 * 1024) AS [MBEmpty]
+        FROM sys.dm_os_buffer_descriptors
+        GROUP BY database_id
+    )
+SELECT
+    CASE [database_id] WHEN 32767 THEN 'Resource DB' ELSE DB_NAME([database_id]) END AS 'DataBase Name',
+    db_buffer_pages AS 'DB Buffer Pages',
+    db_buffer_pages / 128 AS 'DB Buffer Pages Used (MB)',
+    [mbempty] AS 'DB Buffer Pages Free (MB)',
+    CONVERT(DECIMAL(6,3), db_buffer_pages * 100.0 / @total_buffer) AS 'DB Buffer Percentage'
+FROM DBBuffer
+ORDER BY [DB Buffer Pages Used (MB)] DESC;
+
+
+-- Create user and add user to application role
+use [Zarplata];
+GO
+declare @group nvarchar(100)
+declare @sql nvarchar(200)
+declare @role nvarchar(100)
+set @group = trim(N'VTS')
+set @role = trim('RDP')
+set @sql = 'CREATE USER [' + @group + '] FOR LOGIN [' + @group + ']'
+print @sql
+exec (@sql)
+EXEC sp_addrolemember @role, @group;
+
+
+/* Server locked out
+1. C:\Program Files\Microsoft SQL Server\MSSQL12.INSTANCE\MSSQL\Binn>sqlservr.exe -c -m -f -sINSTANCE
+2. sqlcmd -S server\INSTANCE -E
+3. Profit
+*/
